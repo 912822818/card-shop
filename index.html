@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>卡牌商店</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, 'PingFang SC', sans-serif;
+            background: #1a1a2e; color: #fff;
+            min-height: 100vh; min-height: 100dvh;
+            user-select: none; -webkit-user-select: none;
+            overflow-x: hidden;
+        }
+        .container { max-width: 480px; margin: 0 auto; padding: 16px; }
+
+        /* 顶部金币 */
+        .top-bar {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 12px 16px; background: #16213e; border-radius: 16px;
+            margin-bottom: 16px;
+        }
+        .coins {
+            display: flex; align-items: center; gap: 8px;
+            font-size: 20px; font-weight: bold;
+        }
+        .coins::before { content: '🪙'; font-size: 24px; }
+
+        /* 手牌区 */
+        .section-label { font-size: 14px; color: #888; margin-bottom: 8px; display: flex; justify-content: space-between; }
+        .hand {
+            display: flex; gap: 10px; padding: 16px 12px;
+            min-height: 120px; background: #16213e; border-radius: 16px;
+            flex-wrap: wrap; align-content: flex-start;
+            border: 2px dashed transparent; transition: 0.2s;
+            margin-bottom: 20px;
+        }
+        .hand.dragover { border-color: #667eea; background: #1a2744; }
+
+        /* 商店区 */
+        .shop-grid {
+            display: flex; gap: 10px; padding: 16px 12px;
+            min-height: 120px; background: #0f3460; border-radius: 16px;
+            flex-wrap: wrap; align-content: flex-start;
+            margin-bottom: 20px;
+        }
+
+        /* 卡牌 */
+        .card {
+            width: 72px; height: 96px; border-radius: 12px;
+            display: flex; flex-direction: column;
+            justify-content: center; align-items: center;
+            font-weight: bold; font-size: 16px;
+            cursor: grab; touch-action: none;
+            position: relative; transition: transform 0.15s;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            border: 2px solid rgba(255,255,255,0.15);
+            flex-shrink: 0;
+        }
+        .card:active { cursor: grabbing; }
+        .card .price {
+            font-size: 11px; margin-top: 4px;
+            background: rgba(0,0,0,0.4); padding: 2px 8px;
+            border-radius: 8px;
+        }
+        .card .name { font-size: 18px; text-shadow: 0 1px 3px rgba(0,0,0,0.5); }
+
+        /* 拖拽中的克隆 */
+        .card-dragging {
+            position: fixed; pointer-events: none; z-index: 999;
+            transform: scale(1.1) rotate(-3deg);
+            box-shadow: 0 16px 40px rgba(0,0,0,0.5);
+            opacity: 0.9;
+            transition: none;
+        }
+
+        /* 卖出区 */
+        .sell-zone {
+            padding: 16px; border: 2px dashed #555; border-radius: 16px;
+            text-align: center; color: #666; font-size: 14px;
+            transition: 0.2s; min-height: 60px;
+            display: flex; justify-content: center; align-items: center;
+            gap: 8px;
+        }
+        .sell-zone.active { border-color: #e74c3c; color: #e74c3c; background: rgba(231,76,60,0.1); }
+        .sell-zone .icon { font-size: 24px; }
+
+        /* 提示 */
+        .toast {
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+            background: rgba(0,0,0,0.85); color: #fff;
+            padding: 16px 28px; border-radius: 12px; font-size: 18px;
+            opacity: 0; transition: 0.3s; pointer-events: none; z-index: 1000;
+        }
+        .toast.show { opacity: 1; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- 金币 -->
+        <div class="top-bar">
+            <div class="coins" id="coinDisplay">100</div>
+            <span style="color:#888;font-size:14px;">👆 拖到回收区卖掉</span>
+        </div>
+
+        <!-- 手牌 -->
+        <div class="section-label">
+            <span>🎴 我的手牌</span>
+            <span id="handCount">0 张</span>
+        </div>
+        <div class="hand" id="hand"></div>
+
+        <!-- 商店 -->
+        <div class="section-label">
+            <span>🏪 商店</span>
+            <span style="font-size:13px;color:#f39c12;">点击购买</span>
+        </div>
+        <div class="shop-grid" id="shop"></div>
+
+        <!-- 卖出区 -->
+        <div class="sell-zone" id="sellZone">
+            <span class="icon">🗑️</span>
+            将卡牌拖到这里卖掉
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast"></div>
+
+    <script>
+        // ─── 卡牌数据 ───
+        const CARD_TYPES = [
+            { id: 'red',    name: '红', color: '#e74c3c', cost: 30 },
+            { id: 'blue',   name: '蓝', color: '#3498db', cost: 30 },
+            { id: 'green',  name: '绿', color: '#2ecc71', cost: 30 },
+            { id: 'yellow', name: '黄', color: '#f1c40f', cost: 40 },
+            { id: 'purple', name: '紫', color: '#9b59b6', cost: 40 },
+            { id: 'orange', name: '橙', color: '#e67e22', cost: 50 },
+            { id: 'pink',   name: '粉', color: '#fd79a8', cost: 50 },
+            { id: 'teal',   name: '青', color: '#00cec9', cost: 60 },
+            { id: 'coral',  name: '珊瑚', color: '#ff7675', cost: 70 },
+        ];
+        const SELL_RATIO = 0.5;
+        const START_COINS = 100;
+        const SHOP_SIZE = 4;
+        const HAND_START = 3;
+
+        // ─── 状态 ───
+        state = { coins: START_COINS, hand: [], shop: [] };
+
+        // ─── DOM ───
+        const $hand = document.getElementById('hand');
+        const $shop = document.getElementById('shop');
+        const $coin = document.getElementById('coinDisplay');
+        const $handCount = document.getElementById('handCount');
+        const $sellZone = document.getElementById('sellZone');
+        const $toast = document.getElementById('toast');
+
+        let toastTimer = null;
+
+        // ─── 工具 ───
+        function rand(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+
+        function pickCard() {
+            const c = CARD_TYPES[Math.floor(Math.random() * CARD_TYPES.length)];
+            return { ...c, uid: Date.now() + '_' + Math.random().toString(36).slice(2,6) };
+        }
+
+        function shuffleShop() {
+            state.shop = Array.from({ length: SHOP_SIZE }, () => pickCard());
+        }
+
+        function save() { /* no-op for static page */ }
+
+        // ─── Toast ───
+        function toast(text) {
+            clearTimeout(toastTimer);
+            $toast.textContent = text;
+            $toast.classList.add('show');
+            toastTimer = setTimeout(() => $toast.classList.remove('show'), 1000);
+        }
+
+        // ─── 渲染 ───
+        function render() {
+            // 金币
+            $coin.textContent = state.coins;
+
+            // 手牌
+            $hand.innerHTML = '';
+            state.hand.forEach((card, i) => {
+                const el = cardEl(card, 'hand');
+                el.dataset.index = i;
+                $hand.appendChild(el);
+            });
+            $handCount.textContent = state.hand.length + ' 张';
+
+            // 商店
+            $shop.innerHTML = '';
+            state.shop.forEach((card, i) => {
+                const el = cardEl(card, 'shop');
+                el.dataset.index = i;
+                el.addEventListener('pointerdown', onShopCardDown);
+                $shop.appendChild(el);
+            });
+        }
+
+        // ─── 渲染单张卡牌 ───
+        function cardEl(card, from) {
+            const div = document.createElement('div');
+            div.className = 'card';
+            div.style.background = card.color;
+            div.dataset.uid = card.uid;
+            div.dataset.from = from;
+
+            const name = document.createElement('div');
+            name.className = 'name';
+            name.textContent = card.name;
+            div.appendChild(name);
+
+            if (from === 'shop') {
+                const price = document.createElement('div');
+                price.className = 'price';
+                price.textContent = '🪙' + card.cost;
+                div.appendChild(price);
+            }
+
+            // 手牌卡可拖拽
+            if (from === 'hand') {
+                div.addEventListener('pointerdown', onHandCardDown);
+            }
+
+            return div;
+        }
+
+        // ─── 购买（点击商店卡牌） ───
+        function onShopCardDown(e) {
+            e.preventDefault();
+            const el = e.currentTarget;
+            const idx = parseInt(el.dataset.index);
+            const card = state.shop[idx];
+            if (!card) return;
+
+            if (state.coins < card.cost) {
+                toast('💰 金币不够！');
+                return;
+            }
+
+            state.coins -= card.cost;
+            state.hand.push({ ...card });
+            state.shop.splice(idx, 1);
+
+            // 商店补货
+            if (state.shop.length === 0) {
+                shuffleShop();
+            } else if (state.shop.length < SHOP_SIZE) {
+                state.shop.push(pickCard());
+            }
+
+            render();
+            toast(`✅ 购买了 ${card.name} 色卡牌`);
+        }
+
+        // ─── 拖拽 ───
+        let dragState = null;
+
+        function onHandCardDown(e) {
+            if (e.button !== 0 && e.pointerType === 'mouse') return;
+            e.preventDefault();
+            const el = e.currentTarget;
+            const idx = parseInt(el.dataset.index);
+            const card = state.hand[idx];
+            if (!card) return;
+
+            // 克隆元素作为拖拽浮层
+            const clone = el.cloneNode(true);
+            clone.className = 'card card-dragging';
+            clone.style.width = el.offsetWidth + 'px';
+            clone.style.height = el.offsetHeight + 'px';
+
+            const rect = el.getBoundingClientRect();
+            const offsetX = e.clientX - rect.left;
+            const offsetY = e.clientY - rect.top;
+
+            clone.style.left = (rect.left) + 'px';
+            clone.style.top = (rect.top) + 'px';
+            document.body.appendChild(clone);
+
+            el.style.opacity = '0.3';
+
+            dragState = {
+                card, idx, el, clone, offsetX, offsetY, moved: false,
+            };
+
+            document.addEventListener('pointermove', onDragMove);
+            document.addEventListener('pointerup', onDragEnd);
+        }
+
+        function onDragMove(e) {
+            if (!dragState) return;
+            e.preventDefault();
+            dragState.moved = true;
+
+            dragState.clone.style.left = (e.clientX - dragState.offsetX) + 'px';
+            dragState.clone.style.top = (e.clientY - dragState.offsetY) + 'px';
+
+            // 检测是否在卖出区上方
+            const sellRect = $sellZone.getBoundingClientRect();
+            const over = e.clientX >= sellRect.left && e.clientX <= sellRect.right &&
+                         e.clientY >= sellRect.top && e.clientY <= sellRect.bottom;
+            $sellZone.classList.toggle('active', over);
+        }
+
+        function onDragEnd(e) {
+            if (!dragState) return;
+            document.removeEventListener('pointermove', onDragMove);
+            document.removeEventListener('pointerup', onDragEnd);
+
+            $sellZone.classList.remove('active');
+
+            const { card, idx, el, clone } = dragState;
+
+            // 检查是否丢到卖出区
+            const sellRect = $sellZone.getBoundingClientRect();
+            const over = e.clientX >= sellRect.left && e.clientX <= sellRect.right &&
+                         e.clientY >= sellRect.top && e.clientY <= sellRect.bottom;
+
+            if (over && dragState.moved) {
+                // 卖掉
+                const sellPrice = Math.floor(card.cost * SELL_RATIO);
+                state.coins += sellPrice;
+                state.hand.splice(idx, 1);
+                toast(`💰 卖掉 ${card.name} 色卡牌，获得 ${sellPrice} 金币`);
+                render();
+            } else {
+                el.style.opacity = '1';
+            }
+
+            clone.remove();
+            dragState = null;
+        }
+
+        // ─── 初始化 ───
+        function init() {
+            state.hand = Array.from({ length: HAND_START }, () => pickCard());
+            shuffleShop();
+            render();
+        }
+
+        init();
+    </script>
+</body>
+</html>
